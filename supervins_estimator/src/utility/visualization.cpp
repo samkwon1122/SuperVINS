@@ -38,8 +38,11 @@ void registerPub(ros::NodeHandle &n)
     pub_latest_odometry = n.advertise<nav_msgs::Odometry>("imu_propagate", 1000);
     pub_path = n.advertise<nav_msgs::Path>("path", 1000);
     pub_odometry = n.advertise<nav_msgs::Odometry>("odometry", 1000);
-    pub_point_cloud = n.advertise<sensor_msgs::PointCloud>("point_cloud", 1000);
-    pub_margin_cloud = n.advertise<sensor_msgs::PointCloud>("margin_cloud", 1000);
+    // PointCloud2로 변경
+    // pub_point_cloud = n.advertise<sensor_msgs::PointCloud>("point_cloud", 1000);
+    // pub_margin_cloud = n.advertise<sensor_msgs::PointCloud>("margin_cloud", 1000);
+    pub_point_cloud = n.advertise<sensor_msgs::PointCloud2>("point_cloud", 1000);
+    pub_margin_cloud = n.advertise<sensor_msgs::PointCloud2>("margin_cloud", 1000);
     pub_key_poses = n.advertise<visualization_msgs::Marker>("key_poses", 1000);
     pub_camera_pose = n.advertise<nav_msgs::Odometry>("camera_pose", 1000);
     pub_camera_pose_visual = n.advertise<visualization_msgs::MarkerArray>("camera_pose_visual", 1000);
@@ -258,44 +261,46 @@ void pubCameraPose(const Estimator &estimator, const std_msgs::Header &header)
     }
 }
 
+// PointCloud2로 변경
 void pubPointCloud(const Estimator &estimator, const std_msgs::Header &header)
 {
-    sensor_msgs::PointCloud point_cloud, loop_point_cloud;
-    point_cloud.header = header;
-    loop_point_cloud.header = header;
+    pcl::PointCloud<pcl::PointXYZ> cloud;
+    cloud.header.frame_id = "world";
 
     for (auto &it_per_id : estimator.f_manager.feature)
     {
-        int used_num;
-        used_num = it_per_id.feature_per_frame.size();
+        int used_num = it_per_id.feature_per_frame.size();
         if (!(used_num >= 2 && it_per_id.start_frame < WINDOW_SIZE - 2))
             continue;
         if (it_per_id.start_frame > WINDOW_SIZE * 3.0 / 4.0 || it_per_id.solve_flag != 1)
             continue;
+
         int imu_i = it_per_id.start_frame;
         Vector3d pts_i = it_per_id.feature_per_frame[0].point * it_per_id.estimated_depth;
         Vector3d w_pts_i = estimator.Rs[imu_i] * (estimator.ric[0] * pts_i + estimator.tic[0]) + estimator.Ps[imu_i];
 
-        geometry_msgs::Point32 p;
+        pcl::PointXYZ p;
         p.x = w_pts_i(0);
         p.y = w_pts_i(1);
         p.z = w_pts_i(2);
-        point_cloud.points.push_back(p);
+        cloud.points.push_back(p);
     }
-    pub_point_cloud.publish(point_cloud);
 
-    // pub margined potin
-    sensor_msgs::PointCloud margin_cloud;
-    margin_cloud.header = header;
+    sensor_msgs::PointCloud2 cloud_msg;
+    pcl::toROSMsg(cloud, cloud_msg);
+    cloud_msg.header = header;
+    pub_point_cloud.publish(cloud_msg);
+
+
+    // === Margin cloud ===
+    pcl::PointCloud<pcl::PointXYZ> margin_cloud;
+    margin_cloud.header.frame_id = "world";
 
     for (auto &it_per_id : estimator.f_manager.feature)
     {
-        int used_num;
-        used_num = it_per_id.feature_per_frame.size();
+        int used_num = it_per_id.feature_per_frame.size();
         if (!(used_num >= 2 && it_per_id.start_frame < WINDOW_SIZE - 2))
             continue;
-        // if (it_per_id->start_frame > WINDOW_SIZE * 3.0 / 4.0 || it_per_id->solve_flag != 1)
-        //         continue;
 
         if (it_per_id.start_frame == 0 && it_per_id.feature_per_frame.size() <= 2 && it_per_id.solve_flag == 1)
         {
@@ -303,14 +308,18 @@ void pubPointCloud(const Estimator &estimator, const std_msgs::Header &header)
             Vector3d pts_i = it_per_id.feature_per_frame[0].point * it_per_id.estimated_depth;
             Vector3d w_pts_i = estimator.Rs[imu_i] * (estimator.ric[0] * pts_i + estimator.tic[0]) + estimator.Ps[imu_i];
 
-            geometry_msgs::Point32 p;
+            pcl::PointXYZ p;
             p.x = w_pts_i(0);
             p.y = w_pts_i(1);
             p.z = w_pts_i(2);
             margin_cloud.points.push_back(p);
         }
     }
-    pub_margin_cloud.publish(margin_cloud);
+
+    sensor_msgs::PointCloud2 margin_msg;
+    pcl::toROSMsg(margin_cloud, margin_msg);
+    margin_msg.header = header;
+    pub_margin_cloud.publish(margin_msg);
 }
 
 void pubTF(const Estimator &estimator, const std_msgs::Header &header)
@@ -407,9 +416,9 @@ void pubKeyframe(const Estimator &estimator)
 
         pub_keyframe_pose.publish(odometry);
 
-        sensor_msgs::PointCloud point_cloud;
-        point_cloud.header.stamp = ros::Time(estimator.Headers[WINDOW_SIZE - 2]);
-        point_cloud.header.frame_id = "world";
+        pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
+        pcl_cloud.header.frame_id = "world";
+
         for (auto &it_per_id : estimator.f_manager.feature)
         {
             int frame_size = it_per_id.feature_per_frame.size();
@@ -419,22 +428,18 @@ void pubKeyframe(const Estimator &estimator)
                 int imu_i = it_per_id.start_frame;
                 Vector3d pts_i = it_per_id.feature_per_frame[0].point * it_per_id.estimated_depth;
                 Vector3d w_pts_i = estimator.Rs[imu_i] * (estimator.ric[0] * pts_i + estimator.tic[0]) + estimator.Ps[imu_i];
-                geometry_msgs::Point32 p;
+
+                pcl::PointXYZ p;
                 p.x = w_pts_i(0);
                 p.y = w_pts_i(1);
                 p.z = w_pts_i(2);
-                point_cloud.points.push_back(p);
-
-                int imu_j = WINDOW_SIZE - 2 - it_per_id.start_frame;
-                sensor_msgs::ChannelFloat32 p_2d;
-                p_2d.values.push_back(it_per_id.feature_per_frame[imu_j].point.x());
-                p_2d.values.push_back(it_per_id.feature_per_frame[imu_j].point.y());
-                p_2d.values.push_back(it_per_id.feature_per_frame[imu_j].uv.x());
-                p_2d.values.push_back(it_per_id.feature_per_frame[imu_j].uv.y());
-                p_2d.values.push_back(it_per_id.feature_id);
-                point_cloud.channels.push_back(p_2d);
+                pcl_cloud.points.push_back(p);
             }
         }
-        pub_keyframe_point.publish(point_cloud);
+        sensor_msgs::PointCloud2 cloud_msg;
+        pcl::toROSMsg(pcl_cloud, cloud_msg);
+        cloud_msg.header.stamp = ros::Time(estimator.Headers[WINDOW_SIZE - 2]);
+        cloud_msg.header.frame_id = "world";
+        pub_keyframe_point.publish(cloud_msg);
     }
 }

@@ -502,7 +502,7 @@ map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> FeatureTrackerDPL::trac
             std::cout << "Duration: " << duration.count() << " seconds" << std::endl;
 
             // 打开文件进行保存（以追加模式打开）
-            std::ofstream outFile("duration.txt", std::ios::app);
+            std::ofstream outFile("time_consumption/duration.txt", std::ios::app);
             if (outFile.is_open()) {
                 outFile << duration.count() <<std::endl; // 写入执行时间
                 outFile.close(); // 关闭文件

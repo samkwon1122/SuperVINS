@@ -37,6 +37,11 @@
 #include "../estimator/parameters.h"
 #include <fstream>
 
+// PointCloud2로 변경
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+
 extern ros::Publisher pub_odometry;
 extern ros::Publisher pub_path, pub_pose;
 extern ros::Publisher pub_cloud, pub_map;

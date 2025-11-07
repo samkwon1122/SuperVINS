@@ -35,6 +35,7 @@ double TD;
 int NUM_OF_CAM;
 int STEREO;
 int USE_IMU;
+int USE_COMPRESSED_IMAGE;
 int MULTIPLE_THREAD;
 map<int, Eigen::Vector3d> pts_gt;
 std::string IMAGE0_TOPIC, IMAGE1_TOPIC;
@@ -110,6 +111,8 @@ void readParameters(std::string config_file)
         GYR_W = fsSettings["gyr_w"];
         G.z() = fsSettings["g_norm"];
     }
+
+    USE_COMPRESSED_IMAGE = fsSettings["compressed"];
 
     SOLVER_TIME = fsSettings["max_solver_time"];
     NUM_ITERATIONS = fsSettings["max_num_iterations"];

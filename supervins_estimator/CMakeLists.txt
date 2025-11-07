@@ -15,11 +15,12 @@ find_package(catkin REQUIRED COMPONENTS
     tf
     cv_bridge
     camera_models
-    image_transport)
+    image_transport
+    pcl_conversions)
 
 find_package(OpenCV REQUIRED)
-find_package(Ceres REQUIRED PATHS "/home/lhk/Thirdparty/Ceres")
-set(ONNXRUNTIME_ROOTDIR "/home/lhk/Thirdparty/onnxruntime")
+find_package(Ceres REQUIRED PATHS "/workspace/supervins/ceres-bin")
+set(ONNXRUNTIME_ROOTDIR "/workspace/supervins/onnxruntime-linux-x64-gpu-1.19.0")
 include_directories("${ONNXRUNTIME_ROOTDIR}/include")
 link_directories("${ONNXRUNTIME_ROOTDIR}/lib")
 

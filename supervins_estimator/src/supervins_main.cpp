@@ -21,12 +21,16 @@
 #include "estimator/parameters.h"
 #include "utility/visualization.h"
 
+#include <sensor_msgs/CompressedImage.h>
+
 Estimator estimator;
 //数据缓存队列，先进先出
 queue<sensor_msgs::ImuConstPtr> imu_buf;
 queue<sensor_msgs::PointCloudConstPtr> feature_buf;
 queue<sensor_msgs::ImageConstPtr> img0_buf;
 queue<sensor_msgs::ImageConstPtr> img1_buf;
+queue<sensor_msgs::CompressedImageConstPtr> img0_comp_buf;
+queue<sensor_msgs::CompressedImageConstPtr> img1_comp_buf;
 //缓冲锁
 std::mutex m_buf;
 
@@ -51,6 +55,20 @@ void img1_callback(const sensor_msgs::ImageConstPtr &img_msg)
     m_buf.unlock();
 }
 
+void img0_comp_callback(const sensor_msgs::CompressedImageConstPtr &img_msg)
+{
+    m_buf.lock();
+    img0_comp_buf.push(img_msg);
+    m_buf.unlock();
+}
+
+void img1_comp_callback(const sensor_msgs::CompressedImageConstPtr &img_msg)
+{
+    m_buf.lock();
+    img1_comp_buf.push(img_msg);
+    m_buf.unlock();
+}
+
 //将ROS图像消息格式转化为OpenCV格式 cv::Mat
 cv::Mat getImageFromMsg(const sensor_msgs::ImageConstPtr &img_msg)
 {
@@ -71,6 +89,12 @@ cv::Mat getImageFromMsg(const sensor_msgs::ImageConstPtr &img_msg)
         ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);
 
     cv::Mat img = ptr->image.clone();
+    return img;
+}
+
+cv::Mat getImageFromCompMsg(const sensor_msgs::CompressedImageConstPtr &img_msg)
+{
+    cv::Mat img = cv::imdecode(cv::Mat(img_msg->data), cv::IMREAD_GRAYSCALE);
     return img;
 }
 
@@ -167,6 +191,101 @@ void sync_process()
                 estimator.inputImage(time, image);
         }
 
+        std::chrono::milliseconds dura(2);
+        std::this_thread::sleep_for(dura);
+    }
+}
+
+void sync_process_comp()
+{
+    while(1)
+    {
+        //双目情况下
+        //Under binocular conditions
+        if(STEREO)
+        {
+            cv::Mat image0, image1;
+            std_msgs::Header header;
+            double time = 0;
+            //上锁，防止在同步过程中有新图像存入缓冲区
+            //Lock to prevent new images from being stored in the buffer during synchronization
+            m_buf.lock();
+
+            //双目情况下左右目缓冲区都不为0才可以进行同步
+            //In the case of binocular vision, synchronization can only be performed if the buffers of the left and right eyes are both equal to 0.
+            if (!img0_comp_buf.empty() && !img1_comp_buf.empty())
+            {
+                //缓冲区中最老的左右目图像时间戳
+                 //The oldest left and right image timestamp in the buffer
+                double time0 = img0_comp_buf.front()->header.stamp.toSec();
+                double time1 = img1_comp_buf.front()->header.stamp.toSec();
+
+                // 0.003s sync tolerance
+                // 最大允许0.003秒的同步延迟
+
+                //最老左目图像比最老右目图像还要更早出现，更早的时间超过0.003s了，那这张最老左目图像就不要了，直接弹出
+                //The oldest left eye image appears earlier than the oldest right eye image, and the earlier time is more than 0.003s. Then the oldest left eye image is no longer needed and will pop up directly.
+                if(time0 < time1 - 0.003)
+                {
+                    img0_comp_buf.pop();
+                    printf("throw img0\n");
+                }
+                //最老左目图像比最老右目图像还要更晚出现，更晚的时间超过0.003s了，那这张最老右目图像就不要了，直接弹出
+                //The oldest left eye image appears later than the oldest right eye image, and the later time is more than 0.003s. Then the oldest right eye image is no longer needed and will pop up directly.
+                else if(time0 > time1 + 0.003)
+                {
+                    img1_comp_buf.pop();
+                    printf("throw img1\n");
+                }
+                //最老的左右目图像相差不超过0.003，那就是处理它俩了，将这俩图像当作一帧，以左目图像时间戳、header为主，取出图像转化为cv::Mat
+                //The difference between the oldest left and right eye images does not exceed 0.003, that is to process them. Treat these two images as one frame, mainly the left eye image timestamp and header, take out the image and convert it into cv::mat
+                else
+                {
+                    time = img0_comp_buf.front()->header.stamp.toSec();
+                    header = img0_comp_buf.front()->header;
+                    image0 = getImageFromCompMsg(img0_comp_buf.front());
+                    img0_comp_buf.pop();
+                    image1 = getImageFromCompMsg(img1_comp_buf.front());
+                    img1_comp_buf.pop();
+                }
+            }
+            //同步完了，可以解锁了
+            //Synchronization is complete and can be unlocked
+            m_buf.unlock();
+            //图像不为空的话，输入到估计器里
+            //If the image is not empty, enter it into the estimator
+            if(!image0.empty())
+                estimator.inputImage(time, image0, image1);
+        }
+        //单目情况
+        //Monocular situation
+        else
+        {
+            cv::Mat image;
+            std_msgs::Header header;
+            double time = 0;
+            //惯例，先上锁，防止读数据时有新数据插入
+            //As a general rule, lock first to prevent new data from being inserted when reading data.
+            m_buf.lock();
+            //左目图像缓冲区不为空才能处理
+            //The left eye image buffer can only be processed if it is not empty.
+            if(!img0_comp_buf.empty())
+            {
+                //直接取左目最老图像就好了
+                //Just take the oldest left eye image directly
+                time = img0_comp_buf.front()->header.stamp.toSec();
+                header = img0_comp_buf.front()->header;
+                image = getImageFromCompMsg(img0_comp_buf.front());
+                img0_comp_buf.pop();
+            }
+            //解锁
+            //Unlock
+            m_buf.unlock();
+            if(!image.empty())
+                //将图像输入到估计器中，在输入图像的函数中，状态估计就已经开始了
+                 //Input the image into the estimator. In the function of the input image, the state estimation has already started.
+                estimator.inputImage(time, image);
+        }  
         std::chrono::milliseconds dura(2);
         std::this_thread::sleep_for(dura);
     }
@@ -313,11 +432,25 @@ int main(int argc, char **argv)
     }
     //接收特征、图像
     ros::Subscriber sub_feature = n.subscribe("/feature_tracker/feature", 2000, feature_callback);
-    ros::Subscriber sub_img0 = n.subscribe(IMAGE0_TOPIC, 100, img0_callback);
+
+
+    ros::Subscriber sub_img0;
     ros::Subscriber sub_img1;
-    if(STEREO)
+    if(USE_COMPRESSED_IMAGE)
     {
-        sub_img1 = n.subscribe(IMAGE1_TOPIC, 100, img1_callback);
+        sub_img0 = n.subscribe(IMAGE0_TOPIC, 100, img0_comp_callback);
+        if(STEREO)
+        {
+            sub_img1 = n.subscribe(IMAGE1_TOPIC, 100, img1_comp_callback);
+        }
+    }
+    else
+    {
+        sub_img0 = n.subscribe(IMAGE0_TOPIC, 100, img0_callback);
+        if(STEREO)
+        {
+            sub_img1 = n.subscribe(IMAGE1_TOPIC, 100, img1_callback);
+        }
     }
     //接收系统重启、IMU切换、图像切换信号
     //Receive system restart, imu switching, image switching signals
@@ -327,7 +460,15 @@ int main(int argc, char **argv)
 
     //同步处理
     //Synchronization
-    std::thread sync_thread{sync_process};
+    std::thread sync_thread;
+    if(USE_COMPRESSED_IMAGE)
+    {
+        sync_thread = std::thread(sync_process_comp);
+    }
+    else
+    {
+        sync_thread = std::thread(sync_process);
+    }
     ros::spin();
 
     return 0;
